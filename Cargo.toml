@@ -1,0 +1,31 @@
+[package]
+name = "dsf-demo"
+version = "0.1.0"
+authors = ["Ryan Kurte <ryankurte@gmail.com>"]
+edition = "2018"
+
+[dependencies]
+dsf-core = { path = "../dsf-core" }
+dsf-impl = { path = "../dsf-impl" }
+serde = { version = "1.0.91", features = [ "derive" ] }
+structopt = "0.2.15"
+log = "0.4.6"
+simplelog = "0.5.3"
+tokio = { version = "0.1.20" }
+futures = "0.1.27"
+tokio-async-await = "0.1.7"
+linux-embedded-hal = "0.2.2"
+bme280 = "0.1.1"
+
+
+[[bin]]
+name = "dsf-sensor"
+path = "src/sensor.rs"
+
+[[bin]]
+name = "dsf-controller"
+path = "src/controller.rs"
+
+[[bin]]
+name = "dsf-actuator"
+path = "src/actuator.rs"
