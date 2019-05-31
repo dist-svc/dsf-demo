@@ -1,4 +1,4 @@
-#![feature(await_macro, async_await, futures_api)]
+//#![feature(await_macro, async_await, futures_api)]
 
 #[macro_use]
 extern crate log;
@@ -8,15 +8,16 @@ use simplelog::{TermLogger, LevelFilter};
 extern crate structopt;
 use structopt::StructOpt;
 
+#[macro_use]
 extern crate serde;
 extern crate serde_json;
 
 
 extern crate futures;
-use futures::prelude:*;
+use futures::prelude::*;
 
 extern crate tokio;
-use tokio::prelude:*;
+use tokio::prelude::*;
 use tokio::timer::Interval;
 
 #[macro_use]
@@ -24,6 +25,7 @@ extern crate tokio_async_await;
 
 extern crate dsf_core;
 use dsf_core::types::Id;
+use dsf_core::api::*;
 
 extern crate dsf_impl;
 use dsf_impl::client::Client;
@@ -49,7 +51,7 @@ struct Config {
     /// Specify the I2C port for the sensor
     i2c_dev: String,
 
-    #[structopt(long = "period", default_value = "1m")];
+    #[structopt(long = "period", default_value = "1m")]
     /// Specify a period for sensor readings
     period: Duration,
 
@@ -69,8 +71,8 @@ struct Measurements {
     humidity: f32,
 }
 
-impl From<bme280::Measurements> for Measurements {
-    fn from(o: bme280::Measurements) -> Self {
+impl <E> From<bme280::Measurements<E>> for Measurements {
+    fn from(o: bme280::Measurements<E>) -> Self {
         Self {
             temperature: o.temperature,
             pressure: o.pressure,
@@ -82,40 +84,39 @@ impl From<bme280::Measurements> for Measurements {
 fn main() {
     // Fetch arguments
     let config = Config::from_args();
+    let id = config.id;
 
     // Setup logging
-    TermLogger::init(opts.level, simplelog::Config::default()).unwrap();
+    TermLogger::init(config.level, simplelog::Config::default()).unwrap();
 
     // Connect to sensor
-    let i2c_bus = I2cdev::new(config.i2c_dev).expect("error connecting to i2c bus");
+    let i2c_bus = I2cdev::new(&config.i2c_dev).expect("error connecting to i2c bus");
     let mut bme280 = BME280::new_primary(i2c_bus, Delay);
 
     bme280.init().expect("error initialising bme280");
 
-    tokio::run_async( async {
-        // Connect to daemon
-        let c = await!(Client::new(config.daemon_socket));
+    let r = future::lazy(move || {
+        // Connect to daemon and locate the service
+        Client::new(&config.daemon_socket)
+            .map_err(|e| panic!(e) )
+            .and_then(move |mut c| c.locate(&id).map(|s| (c, s) ))
+            .and_then(move |(mut c, s)| {
+                // Start sensor task
+                Interval::new_interval(*config.period)
+                    .for_each(move |_| {
+                        // Read sensor data
+                        let m: Measurements = bme280.measure().unwrap().into();
 
-        // Fetch service instance (managed by daemon)
-        let s = await!(c.locate(id)).expect("error fetching service");
+                        // Convert into JSON data
+                        let d = serde_json::to_string(&m).unwrap();
 
-        // Check service is origin
-        if !s.is_origin {
-            error!("data can only be published using local services")
-        }
+                        // Publish data
+                        c.publish(&s, d.into_bytes())
+                            .map(|_| () ).map_err(|e| panic!(e) )
+                    }).map_err(|e| panic!(e) )
 
-        // Start sensor task
-        Interval::new_interval(config.period)
-            .for_each(move || {
-                // Read sensor data
-                let m: Measurements = bme280.measure().expect("error taking measurement");
-
-                // Convert into JSON data
-                let d = serde_json::to_string(&m);
-
-                // Publish data
-                await!(c.publish(&s, d.into_bytes()).expect("error publishing service data"));
-            })
-
+            }).map_err(|e| panic!(e) )
     });
+
+    tokio::run(r.map(|_| () ).map_err(|_| () ))
 }

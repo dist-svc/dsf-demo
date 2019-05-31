@@ -16,6 +16,8 @@ futures = "0.1.27"
 tokio-async-await = "0.1.7"
 linux-embedded-hal = "0.2.2"
 bme280 = "0.1.1"
+serde_json = "1.0.39"
+humantime = "1.2.0"
 
 
 [[bin]]
