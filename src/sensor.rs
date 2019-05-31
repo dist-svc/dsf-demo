@@ -107,7 +107,7 @@ fn main() {
                         // Read sensor data
                         let m: Measurements = bme280.measure().unwrap().into();
 
-                        // Convert into JSON data
+                        // Convert into JSON object
                         let d = serde_json::to_string(&m).unwrap();
 
                         // Publish data
