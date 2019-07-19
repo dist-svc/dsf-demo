@@ -1,5 +1,7 @@
 //#![feature(await_macro, async_await, futures_api)]
 
+use std::io;
+
 #[macro_use]
 extern crate log;
 extern crate simplelog;
@@ -12,11 +14,12 @@ use structopt::StructOpt;
 extern crate serde;
 extern crate serde_json;
 
-
 extern crate futures;
 use futures::prelude::*;
 
-extern crate tokio;
+extern crate actix;
+use actix::prelude::*;
+
 use tokio::prelude::*;
 use tokio::timer::Interval;
 
@@ -25,11 +28,12 @@ extern crate tokio_async_await;
 
 extern crate dsf_core;
 use dsf_core::types::Id;
+use dsf_core::base::Body;
 use dsf_core::api::*;
 
 extern crate dsf_impl;
 use dsf_impl::client::*;
-use dsf_impl::rpc::{RequestKind, ServiceCommands, ListOptions};
+use dsf_impl::rpc::{RequestKind, ResponseKind, ServiceCommands, ListOptions};
 
 extern crate linux_embedded_hal as hal;
 extern crate bme280;
@@ -63,7 +67,7 @@ struct Measurements {
     humidity: f32,
 }
 
-fn main() {
+fn main() -> Result<(), io::Error> {
     // Fetch arguments
     let config = Config::from_args();
     let id = config.publisher_id;
@@ -71,26 +75,55 @@ fn main() {
     // Setup logging
     TermLogger::init(config.level, simplelog::Config::default()).unwrap();
 
-    tokio::run( future::lazy(move || {
-        // Connect to daemon and locate the service
-        Client::new(&config.daemon_socket)
-            .map_err(|e| panic!(e) )
-            .and_then(move |mut c| c.locate(&id).map(|s| (c, s) ))
+    System::run(move || {
+        // Create client connection
+        let mut c = match Client::new(&config.daemon_socket) {
+            Ok(c) => c,
+            Err(e) => {
+                error!("Error connecting to daemon on '{}': {:?}", &config.daemon_socket, e);
+                System::current().stop();
+                return
+            }
+        };
+
+        actix::spawn(
+            // Locate the service and join the client
+            c.locate(&config.publisher_id).map(|s| (c, s) )       
+            // Subscribe to future data
             .and_then(move |(mut c, s)| {
                 // Subscribe to service and receive all future data
-                c.subscribe(&s, SubscribeOptions::default())
-                .for_each(move |data| {
-                    // Convert into JSON data
-                    let m: Measurements = serde_json::from_slice(&data).unwrap();
+                c.subscribe(&s, SubscribeOptions::default()).map(|x| (c, s, x) )
+            }).and_then(move |(mut _c, s, x)| {
+                // Handle all incoming subscription responses
+                x.for_each(move |msg| {
+                    // Filter for data messages
+                    let data = match msg {
+                        ResponseKind::Data(data) => data,
+                        _ => return Ok(())
+                    };
 
-                    info!("temperature: {:.2}°C", m.temperature);
-                    info!("pressure: {:.2} kPa", m.pressure);
-                    info!("humidity: {:2} %RH", m.humidity);
+                    // Output data
+                    for d in &data {
+                        // Filter for cleartext body
+                        let b = match &d.body {
+                            Body::Cleartext(t) => t,
+                            _ => return Ok(())
+                        };
+
+                        // Convert into JSON data
+                        let m: Measurements = serde_json::from_slice(&b).unwrap();
+
+                        info!("measurement: {:.2}°C, {:.2} kPa, {:2} %RH", m.temperature,  m.pressure, m.humidity);
+                    }
 
                     Ok(())
                 })
+            }).map_err(|e| {
+                error!("DSF error: {:?}", e);
+                System::current().stop();
             })
-    }).map_err(|e| panic!(e) ));
+        )
+    })
 }
 // Start sensor task
         
