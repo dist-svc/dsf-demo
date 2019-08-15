@@ -51,6 +51,11 @@ struct Config {
     /// Specify the I2C port for the sensor
     i2c_dev: String,
 
+
+    #[structopt(long = "i2c-addr", default_value = "0x77")]
+    /// Specify the I2C address for the sensor
+    i2c_addr: u8,
+
     #[structopt(long = "period", default_value = "1m")]
     /// Specify a period for sensor readings
     period: Duration,
@@ -91,7 +96,7 @@ fn main() -> Result<(), io::Error> {
 
     // Connect to sensor
     let i2c_bus = I2cdev::new(&config.i2c_dev).expect("error connecting to i2c bus");
-    let mut bme280 = BME280::new_primary(i2c_bus, Delay);
+    let mut bme280 = BME280::new(i2c_bus, config.i2c_addr, Delay);
 
     bme280.init().expect("error initialising bme280");
 
