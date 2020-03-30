@@ -69,7 +69,7 @@ fn main() {
         let mut client = Client::new(&config.daemon_socket, Duration::from_secs(3))?;
 
         // Locate the service and join the client
-        let service = client.locate(&config.publisher_id).await?;
+        let (service, _info) = client.locate(&config.publisher_id).await?;
 
         // Subscribe to service and receive all future data
         let mut sub = client.subscribe(&service, ()).await?;

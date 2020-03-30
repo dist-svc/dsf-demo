@@ -102,7 +102,7 @@ fn main() {
         let mut client = Client::new(&config.daemon_socket, Duration::from_secs(3))?;
 
         // Locate the service
-        let service = client.locate(&config.service_id).await?;
+        let (service, _info) = client.locate(&config.service_id).await?;
 
         info!("Entering sensor loop");
 
