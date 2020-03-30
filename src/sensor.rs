@@ -1,6 +1,6 @@
 //#![feature(await_macro, async_await, futures_api)]
 
-use std::io;
+use std::time::Duration;
 
 #[macro_use]
 extern crate log;
@@ -14,22 +14,16 @@ use structopt::StructOpt;
 extern crate serde;
 extern crate serde_json;
 
-
 extern crate futures;
-use futures::prelude::*;
 
-extern crate actix;
-use actix::prelude::*;
-
-extern crate tokio;
-use tokio::timer::Interval;
+extern crate async_std;
+use async_std::task;
 
 extern crate dsf_core;
 use dsf_core::types::{Id, DataKind};
-use dsf_core::api::*;
 
-extern crate dsf_impl;
-use dsf_impl::client::Client;
+extern crate dsf_client;
+use dsf_client::prelude::*;
 
 extern crate linux_embedded_hal as hal;
 extern crate bme280;
@@ -38,7 +32,8 @@ use hal::{Delay, I2cdev};
 use bme280::BME280;
 
 extern crate humantime;
-use humantime::Duration;
+use humantime::{Duration as HumanDuration};
+
 
 #[derive(StructOpt)]
 #[structopt(name = "DSF Demo Sensor")]
@@ -58,7 +53,7 @@ struct Config {
 
     #[structopt(long = "period", default_value = "1m")]
     /// Specify a period for sensor readings
-    period: Duration,
+    period: HumanDuration,
 
     #[structopt(short = "d", long = "daemon-socket", default_value = "/tmp/dsf.sock")]
     /// Specify the socket to bind the DSF daemon
@@ -86,7 +81,7 @@ impl <E> From<bme280::Measurements<E>> for Measurements {
     }
 }
 
-fn main() -> Result<(), io::Error> {
+fn main() {
     // Fetch arguments
     let config = Config::from_args();
 
@@ -100,44 +95,38 @@ fn main() -> Result<(), io::Error> {
 
     bme280.init().expect("error initialising bme280");
 
-    System::run(move || {
+    let r: Result<(), ClientError> = task::block_on(async {
         info!("Connecting to client: {}", &config.daemon_socket);
 
         // Create client connection
-        let mut c = match Client::new(&config.daemon_socket) {
-            Ok(c) => c,
-            Err(e) => {
-                error!("Error connecting to daemon on '{}': {:?}", &config.daemon_socket, e);
-                System::current().stop();
-                return
-            }
-        };
+        let mut client = Client::new(&config.daemon_socket, Duration::from_secs(3))?;
 
-        actix::spawn(
-            // Locate the service and join the client
-            c.locate(&config.service_id).map(|s| (c, s) )       
-            // Subscribe to future data
-            .and_then(move |(mut c, s)| {
-                info!("Starting sensor task");
+        // Locate the service
+        let service = client.locate(&config.service_id).await?;
 
-                // Start sensor task
-                Interval::new_interval(*config.period)
-                    .for_each(move |_| {
-                        // Read sensor data
-                        let m: Measurements = bme280.measure().unwrap().into();
+        info!("Entering sensor loop");
 
-                        info!("Publishing measurement: {:?}", m);
+        // Start sensor loop
+        loop {
 
-                        // Convert into JSON object
-                        let d = serde_json::to_string(&m).unwrap();
+            // Read sensor data
+            let m: Measurements = bme280.measure().unwrap().into();
 
-                        // Publish data
-                        c.publish(&s, Some(DataKind::Generic.into()), Some(&d.into_bytes()))
-                            .map(|_| () ).map_err(|e| panic!(e) )
+            info!("Publishing measurement: {:?}", m);
 
-                    }).map_err(|e| panic!(e) )
+            // Convert into JSON object
+            let d = serde_json::to_string(&m).unwrap();
 
-            }).map_err(|e| panic!(e) )
-        )
-    })
+            // Publish data
+            client.publish(&service, Some(DataKind::Generic.into()), Some(&d.into_bytes())).await?;
+
+            // Wait for next tick
+            task::sleep(*config.period).await;
+        }
+    });
+
+
+    if let Err(e) = r {
+        error!("Error: {:?}", e);
+    }
 }
